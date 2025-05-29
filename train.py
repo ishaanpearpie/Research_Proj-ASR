@@ -79,7 +79,7 @@ def cleanup_wandb_runs():
 
 # Configuration
 class Config:
-    model_name = "facebook/wav2vec2-small"
+    model_name = "facebook/wav2vec2-base-960h"
     learning_rate = 1e-4
     epochs = 15
     hidden_dropout = 0.1
