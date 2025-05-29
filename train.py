@@ -113,17 +113,8 @@ def prepare_dataset(data_dir: str):
     if not os.path.exists(audio_clips_dir) or not os.path.isdir(audio_clips_dir):
          raise FileNotFoundError(f"Audio clips directory not found at {audio_clips_dir}. Please verify the dataset structure.")
 
-    # Read the transcription file
-    df = pd.read_csv(csv_path)
-
-    # Ensure the expected columns are present. Adjust column names if needed.
-    # The combined_dataset.csv on Kaggle seems to have 'path' and 'sentence' columns.
-    # We need to map 'path' to 'filename' and 'sentence' to 'transcription'.
-    if 'path' not in df.columns or 'sentence' not in df.columns:
-         raise ValueError("Expected columns 'path' and 'sentence' not found in the CSV. Please check the CSV structure.")
-
-    # Map columns to the expected names by the rest of the script
-    df = df.rename(columns={'path': 'filename', 'sentence': 'transcription'})
+    # Read the CSV file without headers and assign column names
+    df = pd.read_csv(csv_path, header=None, names=['filename', 'transcription'])
     
     # Drop rows with missing, empty, or NaN transcriptions
     df = df[df["transcription"].notna() & (df["transcription"].astype(str).str.strip() != "")]
@@ -133,7 +124,6 @@ def prepare_dataset(data_dir: str):
         # Audio files are in the specified audio_clips_dir
         audio_path = os.path.join(audio_clips_dir, filename)
         if not os.path.exists(audio_path):
-             # For this specific dataset, it seems like the 'path' in CSV is just the filename.
              raise FileNotFoundError(f"Audio file {filename} not found in {audio_clips_dir}.")
 
         waveform, sample_rate = torchaudio.load(audio_path)
@@ -150,14 +140,13 @@ def prepare_dataset(data_dir: str):
         return waveform.squeeze().numpy()
 
     # Create dataset
-    # Load audio data using the updated load_audio function
     dataset_dict = {
         "file_id": df["filename"].tolist(),
         "text": df["transcription"].tolist(),
         "audio": [load_audio(filename) for filename in tqdm(df["filename"])]
     }
     
-    return Dataset.from_dict(dataset_dict) #.train_test_split(test_size=0.1) # Split later after loading all data
+    return Dataset.from_dict(dataset_dict)
 
 @dataclass
 class DataCollatorCTCWithPadding:
