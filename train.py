@@ -1,0 +1,442 @@
+import os
+import torch
+import torchaudio
+import numpy as np
+from datasets import Dataset
+from transformers import (
+    Wav2Vec2ForCTC,
+    Wav2Vec2Processor,
+    Wav2Vec2CTCTokenizer,
+    Wav2Vec2FeatureExtractor,
+    TrainingArguments,
+    Trainer,
+    Wav2Vec2Config
+)
+from torch.optim import AdamW
+from dataclasses import dataclass
+from typing import Dict, List, Union
+import pandas as pd
+from jiwer import wer, cer
+import wandb
+from tqdm import tqdm
+import json
+import psutil
+import platform
+from torch.nn.utils.rnn import pad_sequence
+
+# Set environment variable for MPS fallback (only affects this script)
+os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
+
+def check_system_resources():
+    """Check system resources and provide recommendations."""
+    print("\n=== System Resources Check ===")
+    
+    # CPU Info
+    cpu_count = psutil.cpu_count(logical=False)
+    cpu_percent = psutil.cpu_percent(interval=1)
+    memory = psutil.virtual_memory()
+    
+    print(f"CPU Cores: {cpu_count}")
+    print(f"CPU Usage: {cpu_percent}%")
+    print(f"Available Memory: {memory.available / (1024**3):.2f} GB")
+    
+    # GPU Info
+    if torch.cuda.is_available():
+        print("\nGPU Information:")
+        for i in range(torch.cuda.device_count()):
+            print(f"GPU {i}: {torch.cuda.get_device_name(i)}")
+            print(f"GPU Memory: {torch.cuda.get_device_properties(i).total_memory / (1024**3):.2f} GB")
+    elif torch.backends.mps.is_available():
+        print("\nUsing Apple Silicon GPU (MPS)")
+    else:
+        print("\nNo GPU detected - Training will be slow!")
+        print("\n=== Alternative Computing Resources ===")
+        print("For faster training, consider using:")
+        print("1. Kaggle Notebooks (Free GPU, 30 hours/week)")
+        print("   - Visit: https://www.kaggle.com/notebooks")
+        print("2. Google Colab (Free GPU, limited hours)")
+        print("   - Visit: https://colab.research.google.com")
+        print("3. RunPod (Pay-as-you-go GPU instances)")
+        print("   - Visit: https://www.runpod.io")
+        print("4. Vast.ai (Marketplace for GPU rentals)")
+        print("   - Visit: https://vast.ai")
+        print("\nRecommended minimum specs for this project:")
+        print("- 16GB RAM")
+        print("- NVIDIA GPU with 8GB+ VRAM")
+        print("- 4+ CPU cores")
+
+def cleanup_wandb_runs():
+    """Clean up old wandb runs, keeping only the latest one."""
+    api = wandb.Api()
+    runs = api.runs("telugu-asr")
+    if len(runs) > 1:
+        # Sort runs by creation time, newest first
+        runs = sorted(runs, key=lambda x: x.created_at, reverse=True)
+        # Delete all runs except the latest one
+        for run in runs[1:]:
+            run.delete()
+        print(f"Cleaned up {len(runs)-1} old wandb runs")
+
+# Configuration
+class Config:
+    model_name = "facebook/wav2vec2-small"
+    learning_rate = 1e-4
+    epochs = 15
+    hidden_dropout = 0.1
+    batch_size = 6
+    sampling_rate = 16000
+    # Updated data_dir to the head folder path on Kaggle
+    data_dir = "/kaggle/input/combined-dataset"
+    output_dir = "/kaggle/working/output"  # Kaggle working directory
+    device = "cuda"  # Use CUDA for GPU training
+
+config = Config()
+
+# Initialize wandb with Kaggle-specific settings
+wandb.init(
+    project="telugu-asr",
+    config=vars(config),
+    settings=wandb.Settings(start_method="thread")
+)
+
+def prepare_dataset(data_dir: str):
+    """Load and prepare the dataset."""
+    # Using the exact paths provided by the user
+    csv_path = "/kaggle/input/combined-dataset/combined_dataset.csv"
+    audio_clips_dir = "/kaggle/input/combined-dataset/combined_dataset/combined_dataset"
+
+    if not os.path.exists(csv_path):
+        raise FileNotFoundError(f"Transcription file not found at {csv_path}. Please verify the dataset structure.")
+    if not os.path.exists(audio_clips_dir) or not os.path.isdir(audio_clips_dir):
+         raise FileNotFoundError(f"Audio clips directory not found at {audio_clips_dir}. Please verify the dataset structure.")
+
+    # Read the transcription file
+    df = pd.read_csv(csv_path)
+
+    # Ensure the expected columns are present. Adjust column names if needed.
+    # The combined_dataset.csv on Kaggle seems to have 'path' and 'sentence' columns.
+    # We need to map 'path' to 'filename' and 'sentence' to 'transcription'.
+    if 'path' not in df.columns or 'sentence' not in df.columns:
+         raise ValueError("Expected columns 'path' and 'sentence' not found in the CSV. Please check the CSV structure.")
+
+    # Map columns to the expected names by the rest of the script
+    df = df.rename(columns={'path': 'filename', 'sentence': 'transcription'})
+    
+    # Drop rows with missing, empty, or NaN transcriptions
+    df = df[df["transcription"].notna() & (df["transcription"].astype(str).str.strip() != "")]
+    print(f"Filtered dataset size: {len(df)} rows")
+    
+    def load_audio(filename):
+        # Audio files are in the specified audio_clips_dir
+        audio_path = os.path.join(audio_clips_dir, filename)
+        if not os.path.exists(audio_path):
+             # For this specific dataset, it seems like the 'path' in CSV is just the filename.
+             raise FileNotFoundError(f"Audio file {filename} not found in {audio_clips_dir}.")
+
+        waveform, sample_rate = torchaudio.load(audio_path)
+        
+        # Convert to mono if stereo
+        if waveform.shape[0] > 1:
+            waveform = torch.mean(waveform, dim=0, keepdim=True)
+        
+        # Resample if necessary
+        if sample_rate != config.sampling_rate:
+            resampler = torchaudio.transforms.Resample(sample_rate, config.sampling_rate)
+            waveform = resampler(waveform)
+        
+        return waveform.squeeze().numpy()
+
+    # Create dataset
+    # Load audio data using the updated load_audio function
+    dataset_dict = {
+        "file_id": df["filename"].tolist(),
+        "text": df["transcription"].tolist(),
+        "audio": [load_audio(filename) for filename in tqdm(df["filename"])]
+    }
+    
+    return Dataset.from_dict(dataset_dict) #.train_test_split(test_size=0.1) # Split later after loading all data
+
+@dataclass
+class DataCollatorCTCWithPadding:
+    processor: Wav2Vec2Processor
+    padding: Union[bool, str] = True
+    
+    def __call__(self, features: List[Dict[str, Union[List[int], torch.Tensor]]]) -> Dict[str, torch.Tensor]:
+        filtered_features = []
+        for f in features:
+            text = f.get("text")
+            if text is None or (isinstance(text, float) and pd.isna(text)) or str(text).strip() == "":
+                continue
+            filtered_features.append(f)
+        features = filtered_features
+        if len(features) == 0: # Handle case where all features are filtered out
+             # This might happen on the last batch if it's all invalid, which is fine.
+             # For an empty batch, return empty tensors or handle gracefully.
+             # Depending on the Trainer's expectation, an empty dict might work,
+             # or returning tensors of size 0.
+             # Let's return tensors with correct shapes but size 0.
+             print("Warning: All features in a batch were filtered out.")
+             return {
+                 "input_values": torch.empty(0, dtype=torch.float32),
+                 "attention_mask": torch.empty(0, dtype=torch.long),
+                 "labels": torch.empty(0, dtype=torch.long)
+             }
+        
+        # Prepare input features for processor.pad
+        input_features = [{"input_values": feature["audio"]} for feature in features]
+        batch = self.processor.pad(
+            input_features,
+            padding=self.padding,
+            return_tensors="pt",
+        )
+
+        # Prepare labels (do NOT use processor.pad for labels)
+        label_ids = [torch.tensor(self.processor.tokenizer.encode(feature["text"]), dtype=torch.long) for feature in features]
+        labels = pad_sequence(label_ids, batch_first=True, padding_value=self.processor.tokenizer.pad_token_id)
+        # Replace padding with -100 for CTC loss
+        labels = labels.masked_fill(labels == self.processor.tokenizer.pad_token_id, -100)
+        batch["labels"] = labels
+
+        return batch
+
+def compute_metrics(pred):
+    pred_logits = pred.predictions
+    pred_ids = np.argmax(pred_logits, axis=-1)
+    
+    # pred.label_ids[pred.label_ids == -100] = processor.tokenizer.pad_token_id # This line causes issues, will remove
+    # Decode predicted ids, ignoring pad tokens
+    pred_str = processor.batch_decode(pred_ids, skip_special_tokens=True)
+    # Decode label ids, grouping consecutive tokens
+    pred.label_ids[pred.label_ids == -100] = processor.tokenizer.pad_token_id # Replace -100 back to pad token id for decoding
+    label_str = processor.batch_decode(pred.label_ids, group_tokens=True)
+    
+    # Calculate CER and WER
+    cer_metric = cer(label_str, pred_str)
+    wer_metric = wer(label_str, pred_str)
+    
+    return {"cer": cer_metric, "wer": wer_metric}
+
+if __name__ == "__main__":
+    # Check system resources before starting
+    check_system_resources()
+    
+    # Clean up old wandb runs
+    cleanup_wandb_runs()
+    
+    # Create output directory
+    os.makedirs(config.output_dir, exist_ok=True)
+    
+    # Initialize wandb
+    wandb.init(project="telugu-asr", config=vars(config))
+    
+    # Create vocabulary for Telugu
+    # Re-including the custom vocabulary
+    vocab_dict = {
+        "<pad>": 0,
+        "": 1,
+        "|": 2,
+        "a": 3,
+        "b": 4,
+        "c": 5,
+        "d": 6,
+        "e": 7,
+        "f": 8,
+        "g": 9,
+        "h": 10,
+        "i": 11,
+        "j": 12,
+        "k": 13,
+        "l": 14,
+        "m": 15,
+        "n": 16,
+        "o": 17,
+        "p": 18,
+        "q": 19,
+        "r": 20,
+        "s": 21,
+        "t": 22,
+        "u": 23,
+        "v": 24,
+        "w": 25,
+        "x": 26,
+        "y": 27,
+        "z": 28,
+        " ": 29,
+        "అ": 30,
+        "ఆ": 31,
+        "ఇ": 32,
+        "ఈ": 33,
+        "ఉ": 34,
+        "ఊ": 35,
+        "ఋ": 36,
+        "ౠ": 37,
+        "ఎ": 38,
+        "ఏ": 39,
+        "ఐ": 40,
+        "ఒ": 41,
+        "ఓ": 42,
+        "ఔ": 43,
+        "క": 44,
+        "ఖ": 45,
+        "గ": 46,
+        "ఘ": 47,
+        "ఙ": 48,
+        "చ": 49,
+        "ఛ": 50,
+        "జ": 51,
+        "ఝ": 52,
+        "ఞ": 53,
+        "ట": 54,
+        "ఠ": 55,
+        "డ": 56,
+        "ఢ": 57,
+        "ణ": 58,
+        "త": 59,
+        "థ": 60,
+        "ద": 61,
+        "ధ": 62,
+        "న": 63,
+        "ప": 64,
+        "ఫ": 65,
+        "బ": 66,
+        "భ": 67,
+        "మ": 68,
+        "య": 69,
+        "ర": 70,
+        "ఱ": 71,
+        "ల": 72,
+        "ళ": 73,
+        "వ": 74,
+        "శ": 75,
+        "ష": 76,
+        "స": 77,
+        "హ": 78,
+        "ఽ": 79,
+        "ా": 80,
+        "ి": 81,
+        "ీ": 82,
+        "ు": 83,
+        "ూ": 84,
+        "ృ": 85,
+        "ౄ": 86,
+        "ె": 87,
+        "ే": 88,
+        "ై": 89,
+        "ొ": 90,
+        "ో": 91,
+        "ౌ": 92,
+        "్": 93,
+        "౦": 94,
+        "౧": 95,
+        "౨": 96,
+        "౩": 97,
+        "౪": 98,
+        "౫": 99,
+        "౬": 100,
+        "౭": 101,
+        "౮": 102,
+        "౯": 103,
+    }
+    
+    # Save vocabulary (optional, but good practice)
+    vocab_path = os.path.join(config.output_dir, "vocab.json")
+    with open(vocab_path, "w", encoding="utf-8") as f:
+        json.dump(vocab_dict, f, ensure_ascii=False)
+    
+    # Create tokenizer using custom vocabulary
+    tokenizer = Wav2Vec2CTCTokenizer(
+        vocab_path,
+        unk_token="",
+        pad_token="<pad>",
+        word_delimiter_token="|"
+    )
+    
+    # Load feature extractor from pre-trained model
+    feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained(config.model_name)
+    
+    # Create processor using the loaded feature extractor and custom tokenizer
+    processor = Wav2Vec2Processor(
+        feature_extractor=feature_extractor,
+        tokenizer=tokenizer
+    )
+    
+    # Load and prepare dataset
+    print("Loading and preparing dataset...")
+    dataset = prepare_dataset(config.data_dir)
+    train_dataset = dataset.train_test_split(test_size=0.1)
+    
+    # Load pre-trained model and configure for the new vocabulary size
+    print(f"Loading pre-trained model: {config.model_name} and adapting head for {len(vocab_dict)} labels...")
+    model = Wav2Vec2ForCTC.from_pretrained(
+        config.model_name,
+        num_labels=len(vocab_dict), # Specify the size of your custom vocabulary
+        ctc_loss_reduction="mean",
+        pad_token_id=processor.tokenizer.pad_token_id,
+    )
+    
+    # Ensure the model is moved to the correct device
+    model.to(config.device)
+    
+    # Define training arguments
+    training_args = TrainingArguments(
+        output_dir=config.output_dir,
+        per_device_train_batch_size=config.batch_size,
+        per_device_eval_batch_size=config.batch_size,
+        gradient_accumulation_steps=2, # Adjust if needed based on GPU memory and effective batch size (batch_size * grad_acc_steps)
+        learning_rate=config.learning_rate,
+        num_train_epochs=config.epochs,
+        save_strategy="epoch",  # Save checkpoint after each epoch
+        save_steps=100, # This value is somewhat arbitrary when save_strategy is epoch, but required.
+        save_total_limit=3,  # Keep only the latest 3 checkpoints (epochs can be interrupted)
+        eval_steps=100, # Evaluation will also happen after each epoch due to eval_strategy=epoch
+        logging_steps=10, # Log training progress every 10 steps
+        report_to="wandb",
+        optim="adamw_torch",
+        remove_unused_columns=False,
+        fp16=True,  # Enable mixed precision training
+        gradient_checkpointing=True,  # Enable gradient checkpointing to save memory
+        dataloader_num_workers=4,  # Use multiple workers for data loading
+        dataloader_pin_memory=True,  # Pin memory for faster data transfer to GPU
+        evaluation_strategy="epoch", # Evaluate after each epoch
+        load_best_model_at_end=False, # We will handle evaluation separately with evaluate.py
+        # metric_for_best_model="cer", # Uncomment if you want to load best model based on a metric
+        # greater_is_better=False, # Uncomment if using metric_for_best_model like CER
+    )
+    
+    # Initialize trainer
+    trainer = Trainer(
+        model=model,
+        args=training_args,
+        train_dataset=train_dataset["train"],
+        eval_dataset=train_dataset["test"],
+        data_collator=DataCollatorCTCWithPadding(processor=processor, padding=True),
+        compute_metrics=compute_metrics,
+    )
+    
+    # Train
+    print("Starting training...")
+    # Check if a checkpoint exists to resume from
+    latest_checkpoint = None
+    if os.path.exists(config.output_dir):
+        from transformers.trainer_utils import get_latest_checkpoint
+        latest_checkpoint = get_latest_checkpoint(config.output_dir)
+        if latest_checkpoint: 
+            print(f"Resuming from checkpoint: {latest_checkpoint}")
+
+    trainer.train(resume_from_checkpoint=latest_checkpoint)
+    
+    # Evaluate the model after training
+    print("\nEvaluating final model on the test set...")
+    eval_results = trainer.evaluate(eval_dataset=train_dataset["test"])
+    print("\nFinal Evaluation Results:")
+    print(f"Character Error Rate (CER): {eval_results['eval_cer']:.4f}")
+    print(f"Word Error Rate (WER): {eval_results['eval_wer']:.4f}")
+    
+    # Save final model and processor
+    print("\nSaving final model and processor...")
+    trainer.save_model(os.path.join(config.output_dir, "final_model"))
+    # The processor is saved with the model by save_model, but explicitly saving doesn't hurt.
+    if not os.path.exists(os.path.join(config.output_dir, "final_model", "preprocessor_config.json")):
+         processor.save_pretrained(os.path.join(config.output_dir, "final_model"))
+
+    print("Training completed!")
