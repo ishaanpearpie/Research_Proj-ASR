@@ -93,6 +93,9 @@ class Config:
 config = Config()
 
 # Initialize wandb with Kaggle-specific settings
+os.environ["WANDB_API_KEY"] = "3ab5e0653513d2ec4abd11776b47d3cb515acf63"
+os.environ["WANDB_MODE"] = "online"
+
 wandb.init(
     project="telugu-asr",
     config=vars(config),
