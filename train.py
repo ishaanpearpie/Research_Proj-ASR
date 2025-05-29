@@ -23,6 +23,7 @@ import json
 import psutil
 import platform
 from torch.nn.utils.rnn import pad_sequence
+import datetime
 
 # Set environment variable for MPS fallback (only affects this script)
 os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
@@ -77,6 +78,22 @@ def cleanup_wandb_runs():
             run.delete()
         print(f"Cleaned up {len(runs)-1} old wandb runs")
 
+def cleanup_old_datasets():
+    """Clean up old processed datasets, keeping only the latest one."""
+    cache_dir = config.output_dir
+    if os.path.exists(cache_dir):
+        # Find all processed dataset directories
+        dataset_dirs = [d for d in os.listdir(cache_dir) if d.startswith("processed_dataset")]
+        if len(dataset_dirs) > 1:
+            # Sort by modification time, newest first
+            dataset_dirs.sort(key=lambda x: os.path.getmtime(os.path.join(cache_dir, x)), reverse=True)
+            # Delete all but the newest one
+            for old_dir in dataset_dirs[1:]:
+                old_path = os.path.join(cache_dir, old_dir)
+                print(f"Removing old processed dataset: {old_path}")
+                import shutil
+                shutil.rmtree(old_path)
+
 # Configuration
 class Config:
     model_name = "facebook/wav2vec2-base-960h"
@@ -104,6 +121,23 @@ wandb.init(
 
 def prepare_dataset(data_dir: str):
     """Load and prepare the dataset."""
+    # Clean up old datasets first
+    cleanup_old_datasets()
+    
+    # Define cache path with timestamp
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    cache_path = os.path.join(config.output_dir, f"processed_dataset_{timestamp}")
+    
+    # Check if any processed dataset exists
+    existing_datasets = [d for d in os.listdir(config.output_dir) if d.startswith("processed_dataset")]
+    if existing_datasets:
+        # Use the most recent dataset
+        latest_dataset = max(existing_datasets, key=lambda x: os.path.getmtime(os.path.join(config.output_dir, x)))
+        cache_path = os.path.join(config.output_dir, latest_dataset)
+        print(f"Loading cached processed dataset: {latest_dataset}")
+        return Dataset.load_from_disk(cache_path)
+    
+    print("Processing dataset for the first time...")
     # Using the exact paths provided by the user
     csv_path = "/kaggle/input/combined-dataset/combined_dataset.csv"
     audio_clips_dir = "/kaggle/input/combined-dataset/combined_dataset/combined_dataset"
@@ -146,7 +180,13 @@ def prepare_dataset(data_dir: str):
         "audio": [load_audio(filename) for filename in tqdm(df["filename"])]
     }
     
-    return Dataset.from_dict(dataset_dict)
+    dataset = Dataset.from_dict(dataset_dict)
+    
+    # Save processed dataset
+    print(f"Saving processed dataset to {cache_path}...")
+    dataset.save_to_disk(cache_path)
+    
+    return dataset
 
 @dataclass
 class DataCollatorCTCWithPadding:
