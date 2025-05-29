@@ -208,6 +208,15 @@ def compute_metrics(pred):
     
     return {"cer": cer_metric, "wer": wer_metric}
 
+def evaluate_model(model, processor, dataset):
+    """Evaluate the model and return CER and WER."""
+    print("\nEvaluating model on the test set...")
+    eval_results = trainer.evaluate(eval_dataset=dataset)
+    print("\nEvaluation Results:")
+    print(f"Character Error Rate (CER): {eval_results['eval_cer']:.4f}")
+    print(f"Word Error Rate (WER): {eval_results['eval_wer']:.4f}")
+    return eval_results
+
 if __name__ == "__main__":
     # Check system resources before starting
     check_system_resources()
@@ -361,7 +370,7 @@ if __name__ == "__main__":
     print(f"Loading pre-trained model: {config.model_name} and adapting head for {len(vocab_dict)} labels...")
     model = Wav2Vec2ForCTC.from_pretrained(
         config.model_name,
-        num_labels=len(vocab_dict), # Specify the size of your custom vocabulary
+        num_labels=len(vocab_dict),
         ctc_loss_reduction="mean",
         pad_token_id=processor.tokenizer.pad_token_id,
     )
@@ -374,25 +383,23 @@ if __name__ == "__main__":
         output_dir=config.output_dir,
         per_device_train_batch_size=config.batch_size,
         per_device_eval_batch_size=config.batch_size,
-        gradient_accumulation_steps=2, # Adjust if needed based on GPU memory and effective batch size (batch_size * grad_acc_steps)
+        gradient_accumulation_steps=2,
         learning_rate=config.learning_rate,
         num_train_epochs=config.epochs,
-        save_strategy="epoch",  # Save checkpoint after each epoch
-        save_steps=100, # This value is somewhat arbitrary when save_strategy is epoch, but required.
-        save_total_limit=3,  # Keep only the latest 3 checkpoints (epochs can be interrupted)
-        eval_steps=100, # Evaluation will also happen after each epoch due to eval_strategy=epoch
-        logging_steps=10, # Log training progress every 10 steps
+        save_strategy="epoch",
+        save_steps=100,
+        save_total_limit=3,
+        eval_steps=100,
+        logging_steps=10,
         report_to="wandb",
         optim="adamw_torch",
         remove_unused_columns=False,
-        fp16=True,  # Enable mixed precision training
-        gradient_checkpointing=True,  # Enable gradient checkpointing to save memory
-        dataloader_num_workers=4,  # Use multiple workers for data loading
-        dataloader_pin_memory=True,  # Pin memory for faster data transfer to GPU
-        evaluation_strategy="epoch", # Evaluate after each epoch
-        load_best_model_at_end=False, # We will handle evaluation separately with evaluate.py
-        # metric_for_best_model="cer", # Uncomment if you want to load best model based on a metric
-        # greater_is_better=False, # Uncomment if using metric_for_best_model like CER
+        fp16=True,
+        gradient_checkpointing=True,
+        dataloader_num_workers=4,
+        dataloader_pin_memory=True,
+        evaluation_strategy="steps",
+        load_best_model_at_end=False,
     )
     
     # Initialize trainer
@@ -405,30 +412,32 @@ if __name__ == "__main__":
         compute_metrics=compute_metrics,
     )
     
-    # Train
-    print("Starting training...")
-    # Check if a checkpoint exists to resume from
-    latest_checkpoint = None
-    if os.path.exists(config.output_dir):
-        from transformers.trainer_utils import get_latest_checkpoint
-        latest_checkpoint = get_latest_checkpoint(config.output_dir)
-        if latest_checkpoint: 
-            print(f"Resuming from checkpoint: {latest_checkpoint}")
+    # Check if we should only evaluate
+    if os.path.exists(os.path.join(config.output_dir, "final_model")):
+        print("\nFound existing model. Loading for evaluation...")
+        model = Wav2Vec2ForCTC.from_pretrained(os.path.join(config.output_dir, "final_model"))
+        model.to(config.device)
+        evaluate_model(model, processor, train_dataset["test"])
+    else:
+        # Train
+        print("Starting training...")
+        # Check if a checkpoint exists to resume from
+        latest_checkpoint = None
+        if os.path.exists(config.output_dir):
+            from transformers.trainer_utils import get_latest_checkpoint
+            latest_checkpoint = get_latest_checkpoint(config.output_dir)
+            if latest_checkpoint: 
+                print(f"Resuming from checkpoint: {latest_checkpoint}")
 
-    trainer.train(resume_from_checkpoint=latest_checkpoint)
-    
-    # Evaluate the model after training
-    print("\nEvaluating final model on the test set...")
-    eval_results = trainer.evaluate(eval_dataset=train_dataset["test"])
-    print("\nFinal Evaluation Results:")
-    print(f"Character Error Rate (CER): {eval_results['eval_cer']:.4f}")
-    print(f"Word Error Rate (WER): {eval_results['eval_wer']:.4f}")
-    
-    # Save final model and processor
-    print("\nSaving final model and processor...")
-    trainer.save_model(os.path.join(config.output_dir, "final_model"))
-    # The processor is saved with the model by save_model, but explicitly saving doesn't hurt.
-    if not os.path.exists(os.path.join(config.output_dir, "final_model", "preprocessor_config.json")):
-         processor.save_pretrained(os.path.join(config.output_dir, "final_model"))
+        trainer.train(resume_from_checkpoint=latest_checkpoint)
+        
+        # Evaluate the model after training
+        evaluate_model(model, processor, train_dataset["test"])
+        
+        # Save final model and processor
+        print("\nSaving final model and processor...")
+        trainer.save_model(os.path.join(config.output_dir, "final_model"))
+        if not os.path.exists(os.path.join(config.output_dir, "final_model", "preprocessor_config.json")):
+             processor.save_pretrained(os.path.join(config.output_dir, "final_model"))
 
-    print("Training completed!")
+    print("Process completed!")
