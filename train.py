@@ -428,7 +428,7 @@ if __name__ == "__main__":
         num_train_epochs=config.epochs,
         save_strategy="epoch",
         save_steps=100,
-        save_total_limit=3,
+        save_total_limit=1,  # Keep only the latest checkpoint
         eval_steps=100,
         logging_steps=10,
         report_to="wandb",
@@ -452,32 +452,17 @@ if __name__ == "__main__":
         compute_metrics=compute_metrics,
     )
     
-    # Check if we should only evaluate
-    if os.path.exists(os.path.join(config.output_dir, "final_model")):
-        print("\nFound existing model. Loading for evaluation...")
-        model = Wav2Vec2ForCTC.from_pretrained(os.path.join(config.output_dir, "final_model"))
-        model.to(config.device)
-        evaluate_model(model, processor, train_dataset["test"])
-    else:
-        # Train
-        print("Starting training...")
-        # Check if a checkpoint exists to resume from
-        latest_checkpoint = None
-        if os.path.exists(config.output_dir):
-            from transformers.trainer_utils import get_latest_checkpoint
-            latest_checkpoint = get_latest_checkpoint(config.output_dir)
-            if latest_checkpoint: 
-                print(f"Resuming from checkpoint: {latest_checkpoint}")
-
-        trainer.train(resume_from_checkpoint=latest_checkpoint)
-        
-        # Evaluate the model after training
-        evaluate_model(model, processor, train_dataset["test"])
-        
-        # Save final model and processor
-        print("\nSaving final model and processor...")
-        trainer.save_model(os.path.join(config.output_dir, "final_model"))
-        if not os.path.exists(os.path.join(config.output_dir, "final_model", "preprocessor_config.json")):
-             processor.save_pretrained(os.path.join(config.output_dir, "final_model"))
+    # Train
+    print("Starting training...")
+    trainer.train()
+    
+    # Evaluate the model after training
+    evaluate_model(model, processor, train_dataset["test"])
+    
+    # Save final model and processor
+    print("\nSaving final model and processor...")
+    trainer.save_model(os.path.join(config.output_dir, "final_model"))
+    if not os.path.exists(os.path.join(config.output_dir, "final_model", "preprocessor_config.json")):
+         processor.save_pretrained(os.path.join(config.output_dir, "final_model"))
 
     print("Process completed!")
