@@ -414,6 +414,9 @@ if __name__ == "__main__":
         num_labels=len(vocab_dict),
         vocab_size=len(vocab_dict),  # Set vocab size to match our vocabulary
         pad_token_id=processor.tokenizer.pad_token_id,
+        mask_time_prob=0.1,  # Add some regularization
+        mask_time_length=10,
+        gradient_checkpointing=True,
     )
     
     # Then load the model with the custom config
@@ -421,7 +424,11 @@ if __name__ == "__main__":
         config.model_name,
         config=model_config,
         ctc_loss_reduction="mean",
+        ignore_mismatched_sizes=True,  # Important for handling different vocab sizes
     )
+    
+    # Initialize the classification head with the correct size
+    model.lm_head = torch.nn.Linear(model_config.hidden_size, len(vocab_dict))
     
     # Ensure the model is moved to the correct device
     model.to(config.device)
@@ -448,6 +455,10 @@ if __name__ == "__main__":
         dataloader_pin_memory=True,
         eval_strategy="steps",
         load_best_model_at_end=False,
+        # Add these to help with training stability
+        warmup_steps=500,
+        weight_decay=0.01,
+        max_grad_norm=1.0,
     )
     
     # Initialize trainer
