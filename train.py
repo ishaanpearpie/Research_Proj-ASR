@@ -458,14 +458,9 @@ if __name__ == "__main__":
         warmup_steps=500,
         weight_decay=0.01,
         max_grad_norm=1.0,
-        ddp_find_unused_parameters=False,
-        ddp_backend="nccl",
-        local_rank=-1,
-        torch_compile=True,
-        optim_args={"capturable": True},
     )
     
-    # Initialize trainer with distributed training
+    # Initialize trainer
     trainer = Trainer(
         model=model,
         args=training_args,
