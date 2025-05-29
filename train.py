@@ -417,13 +417,13 @@ if __name__ == "__main__":
         mask_time_prob=0.1,  # Add some regularization
         mask_time_length=10,
         gradient_checkpointing=True,
+        ctc_loss_reduction="mean",  # Moved here from model initialization
     )
     
     # Then load the model with the custom config
     model = Wav2Vec2ForCTC.from_pretrained(
         config.model_name,
         config=model_config,
-        ctc_loss_reduction="mean",
         ignore_mismatched_sizes=True,  # Important for handling different vocab sizes
     )
     
