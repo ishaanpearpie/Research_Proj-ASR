@@ -96,16 +96,15 @@ def cleanup_old_datasets():
 
 # Configuration
 class Config:
-    model_name = "facebook/wav2vec2-base-960h"
+    model_name = "facebook/wav2vec2-small-960h"
     learning_rate = 1e-4
     epochs = 15
     hidden_dropout = 0.1
     batch_size = 6
     sampling_rate = 16000
-    # Updated data_dir to the head folder path on Kaggle
     data_dir = "/kaggle/input/combined-dataset"
-    output_dir = "/kaggle/working/output"  # Kaggle working directory
-    device = "cuda"  # Use CUDA for GPU training
+    output_dir = "/kaggle/working/output"
+    device = "cuda"
 
 config = Config()
 
@@ -408,11 +407,20 @@ if __name__ == "__main__":
     
     # Load pre-trained model and configure for the new vocabulary size
     print(f"Loading pre-trained model: {config.model_name} and adapting head for {len(vocab_dict)} labels...")
-    model = Wav2Vec2ForCTC.from_pretrained(
+    
+    # First load the model config
+    model_config = Wav2Vec2Config.from_pretrained(
         config.model_name,
         num_labels=len(vocab_dict),
-        ctc_loss_reduction="mean",
+        vocab_size=len(vocab_dict),  # Set vocab size to match our vocabulary
         pad_token_id=processor.tokenizer.pad_token_id,
+    )
+    
+    # Then load the model with the custom config
+    model = Wav2Vec2ForCTC.from_pretrained(
+        config.model_name,
+        config=model_config,
+        ctc_loss_reduction="mean",
     )
     
     # Ensure the model is moved to the correct device
