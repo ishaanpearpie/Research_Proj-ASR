@@ -100,7 +100,7 @@ class Config:
     learning_rate = 1e-4
     epochs = 15
     hidden_dropout = 0.1
-    batch_size = 6
+    batch_size = 16
     sampling_rate = 16000
     data_dir = "/kaggle/input/combined-dataset"
     output_dir = "/kaggle/working/output"
@@ -438,12 +438,12 @@ if __name__ == "__main__":
         output_dir=config.output_dir,
         per_device_train_batch_size=config.batch_size,
         per_device_eval_batch_size=config.batch_size,
-        gradient_accumulation_steps=2,
+        gradient_accumulation_steps=1,
         learning_rate=config.learning_rate,
         num_train_epochs=config.epochs,
         save_strategy="epoch",
         save_steps=100,
-        save_total_limit=1,  # Keep only the latest checkpoint
+        save_total_limit=1,
         eval_steps=100,
         logging_steps=10,
         report_to="wandb",
@@ -455,13 +455,17 @@ if __name__ == "__main__":
         dataloader_pin_memory=True,
         eval_strategy="steps",
         load_best_model_at_end=False,
-        # Add these to help with training stability
         warmup_steps=500,
         weight_decay=0.01,
         max_grad_norm=1.0,
+        ddp_find_unused_parameters=False,
+        ddp_backend="nccl",
+        local_rank=-1,
+        torch_compile=True,
+        optim_args={"capturable": True},
     )
     
-    # Initialize trainer
+    # Initialize trainer with distributed training
     trainer = Trainer(
         model=model,
         args=training_args,
