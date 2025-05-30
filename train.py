@@ -254,11 +254,10 @@ def compute_metrics(pred):
     pred_logits = pred.predictions
     pred_ids = np.argmax(pred_logits, axis=-1)
     
-    # pred.label_ids[pred.label_ids == -100] = processor.tokenizer.pad_token_id # This line causes issues, will remove
     # Decode predicted ids, ignoring pad tokens
     pred_str = processor.batch_decode(pred_ids, skip_special_tokens=True)
     # Decode label ids, grouping consecutive tokens
-    pred.label_ids[pred.label_ids == -100] = processor.tokenizer.pad_token_id # Replace -100 back to pad token id for decoding
+    pred.label_ids[pred.label_ids == -100] = processor.tokenizer.pad_token_id
     label_str = processor.batch_decode(pred.label_ids, group_tokens=True)
     
     # === Debugging: Print examples and predicted IDs ===
@@ -268,7 +267,9 @@ def compute_metrics(pred):
         print(f"Prediction: {pred_str[i]}")
         # Print raw predicted IDs for the first few sequences
         if i < 2: # Print IDs for the first 2 examples
-            print(f"Predicted IDs: {pred_ids[i][:50]}...") # Print first 50 IDs
+            print(f"Predicted IDs (start): {pred_ids[i][:50]}...") # Print first 50 IDs
+            if pred_ids[i].shape[0] > 50:
+                 print(f"Predicted IDs (end): {pred_ids[i][-50:]}...") # Print last 50 IDs
         print("-" * 20)
     print("-------------------------")
     # ================================================
