@@ -214,29 +214,38 @@ class DataCollatorCTCWithPadding:
             input_features,
             padding=self.padding,
             return_tensors="pt",
-            return_attention_mask=True,  # Explicitly request attention mask
+            return_attention_mask=True,
         )
 
         # Prepare labels (do NOT use processor.pad for labels)
         label_ids = [torch.tensor(self.processor.tokenizer.encode(feature["text"]), dtype=torch.long) for feature in features]
+        
+        # === Debugging: Inspect label_ids before padding ===
+        print("\n--- Debug Label IDs before padding ---")
+        for i in range(min(2, len(label_ids))):
+             print(f"Sample {i} label_ids: {label_ids[i][:50]}...")
+        print("------------------------------------")
+        # ===========================================
+
         labels = pad_sequence(label_ids, batch_first=True, padding_value=self.processor.tokenizer.pad_token_id)
+        
+        # === Debugging: Inspect labels after padding ===
+        print("\n--- Debug Labels after padding ---")
+        print(f"Labels shape after padding: {labels.shape}")
+        print(f"Labels snippet (first 2 rows) after padding: {labels[:2]}")
+        print("-------------------------------------")
+        # ===========================================
+
         # Replace padding with -100 for CTC loss
         labels = labels.masked_fill(labels == self.processor.tokenizer.pad_token_id, -100)
         batch["labels"] = labels
 
-        # === Debugging: Print batch info ===
-        # Removed debugging prints to clean up output
-        # print("\n--- Debug Batch Info ---")
-        # print(f"input_values shape: {batch['input_values'].shape}")
-        # print(f"input_values dtype: {batch['input_values'].dtype}")
-        # print(f"attention_mask shape: {batch['attention_mask'].shape}")
-        # print(f"attention_mask dtype: {batch['attention_mask'].dtype}")
-        # print(f"labels shape: {batch['labels'].shape}")
-        # print(f"labels dtype: {batch['labels'].dtype}")
-        # # Print a small snippet of labels to check values
-        # print(f"labels snippet (first 2 rows): {batch['labels'][:2]}")
-        # print("-------------------------")
-        # ===================================
+        # === Debugging: Inspect labels after -100 masking ===
+        print("\n--- Debug Labels after -100 masking ---")
+        print(f"Labels shape after masking: {labels.shape}")
+        print(f"Labels snippet (first 2 rows) after masking: {labels[:2]}")
+        print("-----------------------------------------")
+        # =============================================
 
         return batch
 
