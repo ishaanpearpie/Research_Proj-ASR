@@ -241,6 +241,15 @@ def compute_metrics(pred):
     pred.label_ids[pred.label_ids == -100] = processor.tokenizer.pad_token_id # Replace -100 back to pad token id for decoding
     label_str = processor.batch_decode(pred.label_ids, group_tokens=True)
     
+    # === Debugging: Print examples ===
+    print("\n--- Evaluation Examples ---")
+    for i in range(min(5, len(pred_str))):
+        print(f"Target: {label_str[i]}")
+        print(f"Prediction: {pred_str[i]}")
+        print("-" * 20)
+    print("-------------------------")
+    # ===============================
+    
     # Calculate CER and WER
     cer_metric = cer(label_str, pred_str)
     wer_metric = wer(label_str, pred_str)
