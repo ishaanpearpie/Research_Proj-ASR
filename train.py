@@ -471,7 +471,7 @@ if __name__ == "__main__":
         report_to="wandb",
         optim="adamw_torch",
         remove_unused_columns=False,
-        fp16=True,
+        fp16=False,  # Disable mixed precision for debugging NaN
         gradient_checkpointing=True,
         dataloader_num_workers=4,
         dataloader_pin_memory=True,
@@ -480,7 +480,7 @@ if __name__ == "__main__":
         warmup_steps=500,
         weight_decay=0.01,
         max_grad_norm=1.0,
-        lr_scheduler_type="cosine", # Use cosine annealing scheduler
+        lr_scheduler_type="cosine",
     )
     
     # Initialize trainer
