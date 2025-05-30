@@ -214,6 +214,7 @@ class DataCollatorCTCWithPadding:
             input_features,
             padding=self.padding,
             return_tensors="pt",
+            return_attention_mask=True,  # Explicitly request attention mask
         )
 
         # Prepare labels (do NOT use processor.pad for labels)
@@ -224,16 +225,17 @@ class DataCollatorCTCWithPadding:
         batch["labels"] = labels
 
         # === Debugging: Print batch info ===
-        print("\n--- Debug Batch Info ---")
-        print(f"input_values shape: {batch['input_values'].shape}")
-        print(f"input_values dtype: {batch['input_values'].dtype}")
-        print(f"attention_mask shape: {batch['attention_mask'].shape}")
-        print(f"attention_mask dtype: {batch['attention_mask'].dtype}")
-        print(f"labels shape: {batch['labels'].shape}")
-        print(f"labels dtype: {batch['labels'].dtype}")
-        # Print a small snippet of labels to check values
-        print(f"labels snippet (first 2 rows): {batch['labels'][:2]}")
-        print("-------------------------")
+        # Removed debugging prints to clean up output
+        # print("\n--- Debug Batch Info ---")
+        # print(f"input_values shape: {batch['input_values'].shape}")
+        # print(f"input_values dtype: {batch['input_values'].dtype}")
+        # print(f"attention_mask shape: {batch['attention_mask'].shape}")
+        # print(f"attention_mask dtype: {batch['attention_mask'].dtype}")
+        # print(f"labels shape: {batch['labels'].shape}")
+        # print(f"labels dtype: {batch['labels'].dtype}")
+        # # Print a small snippet of labels to check values
+        # print(f"labels snippet (first 2 rows): {batch['labels'][:2]}")
+        # print("-------------------------")
         # ===================================
 
         return batch
