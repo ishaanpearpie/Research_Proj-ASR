@@ -191,6 +191,8 @@ def prepare_dataset(data_dir: str):
 class DataCollatorCTCWithPadding:
     processor: Wav2Vec2Processor
     padding: Union[bool, str] = True
+    # Add a counter to print debugging info only once
+    debug_printed = False
     
     def __call__(self, features: List[Dict[str, Union[List[int], torch.Tensor]]]) -> Dict[str, torch.Tensor]:
         filtered_features = []
@@ -220,31 +222,29 @@ class DataCollatorCTCWithPadding:
         # Prepare labels (do NOT use processor.pad for labels)
         label_ids = [torch.tensor(self.processor.tokenizer.encode(feature["text"]), dtype=torch.long) for feature in features]
         
-        # === Debugging: Inspect label_ids before padding ===
-        print("\n--- Debug Label IDs before padding ---")
-        for i in range(min(2, len(label_ids))):
-             print(f"Sample {i} label_ids: {label_ids[i][:50]}...")
-        print("------------------------------------")
-        # ===========================================
-
         labels = pad_sequence(label_ids, batch_first=True, padding_value=self.processor.tokenizer.pad_token_id)
         
-        # === Debugging: Inspect labels after padding ===
-        print("\n--- Debug Labels after padding ---")
-        print(f"Labels shape after padding: {labels.shape}")
-        print(f"Labels snippet (first 2 rows) after padding: {labels[:2]}")
-        print("-------------------------------------")
-        # ===========================================
-
         # Replace padding with -100 for CTC loss
         labels = labels.masked_fill(labels == self.processor.tokenizer.pad_token_id, -100)
         batch["labels"] = labels
 
-        # === Debugging: Inspect labels after -100 masking ===
-        print("\n--- Debug Labels after -100 masking ---")
-        print(f"Labels shape after masking: {labels.shape}")
-        print(f"Labels snippet (first 2 rows) after masking: {labels[:2]}")
-        print("-----------------------------------------")
+        # === Debugging: Print batch info only for the first batch ===
+        if not self.debug_printed:
+            print("\n--- Debug Label IDs before padding ---")
+            for i in range(min(2, len(label_ids))):
+                 print(f"Sample {i} label_ids: {label_ids[i][:50]}...")
+            print("------------------------------------")
+            
+            print("\n--- Debug Labels after padding ---")
+            print(f"Labels shape after padding: {labels.shape}")
+            print(f"Labels snippet (first 2 rows) after padding: {labels[:2]}")
+            print("-------------------------------------")
+            
+            print("\n--- Debug Labels after -100 masking ---")
+            print(f"Labels shape after masking: {labels.shape}")
+            print(f"Labels snippet (first 2 rows) after masking: {labels[:2]}")
+            print("-----------------------------------------")
+            self.debug_printed = True # Set to True after printing
         # =============================================
 
         return batch
