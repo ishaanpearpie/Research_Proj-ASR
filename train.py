@@ -200,12 +200,7 @@ class DataCollatorCTCWithPadding:
                 continue
             filtered_features.append(f)
         features = filtered_features
-        if len(features) == 0: # Handle case where all features are filtered out
-             # This might happen on the last batch if it's all invalid, which is fine.
-             # For an empty batch, return empty tensors or handle gracefully.
-             # Depending on the Trainer's expectation, an empty dict might work,
-             # or returning tensors of size 0.
-             # Let's return tensors with correct shapes but size 0.
+        if len(features) == 0:
              print("Warning: All features in a batch were filtered out.")
              return {
                  "input_values": torch.empty(0, dtype=torch.float32),
@@ -227,6 +222,19 @@ class DataCollatorCTCWithPadding:
         # Replace padding with -100 for CTC loss
         labels = labels.masked_fill(labels == self.processor.tokenizer.pad_token_id, -100)
         batch["labels"] = labels
+
+        # === Debugging: Print batch info ===
+        print("\n--- Debug Batch Info ---")
+        print(f"input_values shape: {batch['input_values'].shape}")
+        print(f"input_values dtype: {batch['input_values'].dtype}")
+        print(f"attention_mask shape: {batch['attention_mask'].shape}")
+        print(f"attention_mask dtype: {batch['attention_mask'].dtype}")
+        print(f"labels shape: {batch['labels'].shape}")
+        print(f"labels dtype: {batch['labels'].dtype}")
+        # Print a small snippet of labels to check values
+        print(f"labels snippet (first 2 rows): {batch['labels'][:2]}")
+        print("-------------------------")
+        # ===================================
 
         return batch
 
