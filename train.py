@@ -24,6 +24,7 @@ import psutil
 import platform
 from torch.nn.utils.rnn import pad_sequence
 import datetime
+from transformers.trainer_callback import TrainerCallback
 
 # Set environment variable for MPS fallback (only affects this script)
 os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
@@ -287,6 +288,24 @@ def evaluate_model(model, processor, dataset):
     print(f"Word Error Rate (WER): {eval_results['eval_wer']:.4f}")
     return eval_results
 
+class DebuggingCallback(TrainerCallback):
+    """A callback to print debugging information during training."""
+    def on_step_end(self, args, state, control, **kwargs):
+        if state.global_step % 10 == 0: # Print every 10 steps
+            outputs = kwargs.get("outputs")
+            if outputs is not None:
+                print(f"\n--- Debugging Step {state.global_step} ---")
+                if outputs.loss is not None:
+                    print(f"Loss shape: {outputs.loss.shape}")
+                    print(f"Loss dtype: {outputs.loss.dtype}")
+                    print(f"Loss value: {outputs.loss.item()}")
+                if outputs.logits is not None:
+                    print(f"Logits shape: {outputs.logits.shape}")
+                    print(f"Logits dtype: {outputs.logits.dtype}")
+                    # Print a snippet of logits to check values (optional, can be very large)
+                    # print(f"Logits snippet (first logit): {outputs.logits[0, 0, :10]}")
+                print("-------------------------")
+
 if __name__ == "__main__":
     # Check system resources before starting
     check_system_resources()
@@ -500,6 +519,8 @@ if __name__ == "__main__":
         eval_dataset=train_dataset["test"],
         data_collator=DataCollatorCTCWithPadding(processor=processor, padding=True),
         compute_metrics=compute_metrics,
+        # Add the debugging callback
+        callbacks=[DebuggingCallback()],
     )
     
     # Train
