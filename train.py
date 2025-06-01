@@ -98,7 +98,7 @@ def cleanup_old_datasets():
 # Configuration
 class Config:
     model_name = "facebook/wav2vec2-base-960h"
-    learning_rate = 2e-4
+    learning_rate = 3e-4
     epochs = 15
     hidden_dropout = 0.1
     batch_size = 16
