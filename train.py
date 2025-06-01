@@ -25,6 +25,7 @@ import platform
 from torch.nn.utils.rnn import pad_sequence
 import datetime
 from transformers.trainer_callback import TrainerCallback
+import torch.nn.functional as F
 
 # Set environment variable for MPS fallback (only affects this script)
 os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
@@ -307,6 +308,39 @@ class DebuggingCallback(TrainerCallback):
                     # print(f"Logits snippet (first logit): {outputs.logits[0, 0, :10]}")
                 print("-------------------------")
 
+class PenalizePadCallback(TrainerCallback):
+    """A callback to penalize pad token prediction in early training steps."""
+    def on_step_begin(self, args, state, control, **kwargs):
+        # Access the model if needed, but modifying outputs in on_step_end is better
+        pass
+
+    def on_step_end(self, args, state, control, **kwargs):
+        # Apply penalty only in early steps, e.g., first 500 steps
+        if state.global_step < 500:
+            outputs = kwargs.get("outputs")
+            labels = kwargs.get("labels")
+            model = kwargs.get("model")
+
+            if outputs is not None and outputs.logits is not None and labels is not None and model is not None:
+                # Calculate probability of predicting pad token
+                # Use log_softmax for numerical stability and apply exp
+                log_probs = F.log_softmax(outputs.logits, dim=-1)
+                pad_token_id = model.config.pad_token_id
+
+                # Probability of predicting pad token across all time steps and batch items
+                pad_probs = torch.exp(log_probs[:, :, pad_token_id])
+
+                # Simple penalty: higher probability of pad -> higher penalty
+                # Penalty strength decays over steps
+                penalty_strength = (500 - state.global_step) / 500.0 # Decays from 1 to 0
+                penalty = pad_probs.mean() * penalty_strength * 0.1 # Adjust 0.1 as needed
+
+                # Add penalty to the loss. This is a heuristic!
+                if outputs.loss is not None:
+                    outputs.loss = outputs.loss + penalty
+                    # Optional: print penalty value
+                    # print(f"Step {state.global_step}: Added penalty {penalty.item()}")
+
 class CustomWav2Vec2ForCTC(Wav2Vec2ForCTC):
     """Custom Wav2Vec2ForCTC to add epsilon to logits for stability."""
     def forward(
@@ -548,8 +582,8 @@ if __name__ == "__main__":
         eval_dataset=train_dataset["test"],
         data_collator=DataCollatorCTCWithPadding(processor=processor, padding=True),
         compute_metrics=compute_metrics,
-        # Add the debugging callback
-        callbacks=[DebuggingCallback()],
+        # Add the debugging callback and the new penalty callback
+        callbacks=[DebuggingCallback(), PenalizePadCallback()],
     )
     
     # Train
