@@ -307,6 +307,34 @@ class DebuggingCallback(TrainerCallback):
                     # print(f"Logits snippet (first logit): {outputs.logits[0, 0, :10]}")
                 print("-------------------------")
 
+class CustomWav2Vec2ForCTC(Wav2Vec2ForCTC):
+    """Custom Wav2Vec2ForCTC to add epsilon to logits for stability."""
+    def forward(
+        self,
+        input_values,
+        attention_mask=None,
+        output_attentions=None,
+        output_hidden_states=None,
+        return_dict=None,
+        labels=None,
+    ):
+        # Call the parent class's forward method
+        outputs = super().forward(
+            input_values,
+            attention_mask=attention_mask,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict,
+            labels=labels,
+        )
+
+        # Add a small epsilon to logits for numerical stability, especially early in training
+        # This value might need tuning
+        epsilon = 1e-5 # Small value to add
+        outputs.logits = outputs.logits + epsilon
+
+        return outputs
+
 if __name__ == "__main__":
     # Check system resources before starting
     check_system_resources()
@@ -465,17 +493,17 @@ if __name__ == "__main__":
         num_labels=len(vocab_dict),
         vocab_size=len(vocab_dict),  # Set vocab size to match our vocabulary
         pad_token_id=processor.tokenizer.pad_token_id,
-        mask_time_prob=0.1,  # Add some regularization
+        mask_time_prob=0.1,
         mask_time_length=10,
         gradient_checkpointing=True,
-        ctc_loss_reduction="mean",  # Moved here from model initialization
+        ctc_loss_reduction="mean",
     )
     
     # Then load the model with the custom config
-    model = Wav2Vec2ForCTC.from_pretrained(
+    model = CustomWav2Vec2ForCTC.from_pretrained(
         config.model_name,
         config=model_config,
-        ignore_mismatched_sizes=True,  # Important for handling different vocab sizes
+        ignore_mismatched_sizes=True,
     )
     
     # Initialize the classification head with the correct size
