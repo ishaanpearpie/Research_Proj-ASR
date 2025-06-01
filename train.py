@@ -330,7 +330,7 @@ class CustomWav2Vec2ForCTC(Wav2Vec2ForCTC):
 
         # Add a small epsilon to logits for numerical stability, especially early in training
         # This value might need tuning
-        epsilon = 1e-5 # Small value to add
+        epsilon = 1e-2 # Increased epsilon value
         outputs.logits = outputs.logits + epsilon
 
         return outputs
