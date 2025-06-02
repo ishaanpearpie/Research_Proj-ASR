@@ -333,7 +333,7 @@ class PenalizePadCallback(TrainerCallback):
                 # Simple penalty: higher probability of pad -> higher penalty
                 # Penalty strength decays over steps
                 penalty_strength = (500 - state.global_step) / 500.0 # Decays from 1 to 0
-                penalty = pad_probs.mean() * penalty_strength * 0.1 # Adjust 0.1 as needed
+                penalty = pad_probs.mean() * penalty_strength * 0.5 # Increased multiplier to 0.5
 
                 # Add penalty to the loss. This is a heuristic!
                 if outputs.loss is not None:
