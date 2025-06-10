@@ -155,33 +155,47 @@ def prepare_dataset(data_dir: str):
     df = df[df["transcription"].notna() & (df["transcription"].astype(str).str.strip() != "")]
     print(f"Filtered dataset size: {len(df)} rows")
     
-    def load_audio(filename):
-        # Audio files are in the specified audio_clips_dir
-        audio_path = os.path.join(audio_clips_dir, filename)
-        if not os.path.exists(audio_path):
-             raise FileNotFoundError(f"Audio file {filename} not found in {audio_clips_dir}.")
-
-        waveform, sample_rate = torchaudio.load(audio_path)
-        
-        # Convert to mono if stereo
-        if waveform.shape[0] > 1:
-            waveform = torch.mean(waveform, dim=0, keepdim=True)
-        
-        # Resample if necessary
-        if sample_rate != config.sampling_rate:
-            resampler = torchaudio.transforms.Resample(sample_rate, config.sampling_rate)
-            waveform = resampler(waveform)
-        
-        return waveform.squeeze().numpy()
-
-    # Create dataset
-    dataset_dict = {
-        "file_id": df["filename"].tolist(),
-        "text": df["transcription"].tolist(),
-        "audio": [load_audio(filename) for filename in tqdm(df["filename"])]
-    }
+    # Create dataset from dataframe (only filename and transcription initially)
+    dataset = Dataset.from_pandas(df)
     
-    dataset = Dataset.from_dict(dataset_dict)
+    # Define a function to load and preprocess audio features
+    def prepare_dataset_features(batch):
+        # Audio files are in the specified audio_clips_dir
+        audio_paths = [os.path.join(audio_clips_dir, filename) for filename in batch["filename"]]
+        
+        # Load and resample audio
+        processed_audio = []
+        for audio_path in audio_paths:
+            if not os.path.exists(audio_path):
+                raise FileNotFoundError(f"Audio file {os.path.basename(audio_path)} not found in {audio_clips_dir}.")
+
+            waveform, sample_rate = torchaudio.load(audio_path)
+            
+            # Convert to mono if stereo
+            if waveform.shape[0] > 1:
+                waveform = torch.mean(waveform, dim=0, keepdim=True)
+            
+            # Resample if necessary
+            if sample_rate != config.sampling_rate:
+                resampler = torchaudio.transforms.Resample(sample_rate, config.sampling_rate)
+                waveform = resampler(waveform)
+            
+            processed_audio.append(waveform.squeeze().numpy())
+            
+        # Process audio using the Wav2Vec2Processor
+        batch["input_values"] = processor(processed_audio, sampling_rate=config.sampling_rate).input_values
+        batch["labels"] = processor.tokenizer(batch["transcription"]).input_ids
+        return batch
+
+    # Apply the preprocessing function using map for memory efficiency
+    print("Mapping audio processing function to dataset (this might take a while)...")
+    dataset = dataset.map(
+        prepare_dataset_features,
+        remove_columns=dataset.column_names, # Remove original columns if desired
+        batch_size=config.batch_size, # Process in batches
+        batched=True,
+        num_proc=4 # Use multiple processes for faster mapping, adjust based on CPU cores
+    )
     
     # Save processed dataset
     print(f"Saving processed dataset to {cache_path}...")
@@ -213,7 +227,8 @@ class DataCollatorCTCWithPadding:
              }
         
         # Prepare input features for processor.pad
-        input_features = [{"input_values": feature["audio"]} for feature in features]
+        # Now, input_values are directly in the features dictionary
+        input_features = [{"input_values": feature["input_values"]} for feature in features]
         batch = self.processor.pad(
             input_features,
             padding=self.padding,
@@ -222,7 +237,7 @@ class DataCollatorCTCWithPadding:
         )
 
         # Prepare labels (do NOT use processor.pad for labels)
-        label_ids = [torch.tensor(self.processor.tokenizer.encode(feature["text"]), dtype=torch.long) for feature in features]
+        label_ids = [torch.tensor(feature["labels"], dtype=torch.long) for feature in features]
         
         labels = pad_sequence(label_ids, batch_first=True, padding_value=self.processor.tokenizer.pad_token_id)
         
