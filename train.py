@@ -149,7 +149,7 @@ def prepare_dataset(data_dir: str):
          raise FileNotFoundError(f"Audio clips directory not found at {audio_clips_dir}. Please verify the dataset structure.")
 
     # Read the CSV file without headers and assign column names
-    df = pd.read_csv(csv_path, header=None, names=['filename', 'transcription'])
+    df = pd.read_csv(csv_path)
     
     # Drop rows with missing, empty, or NaN transcriptions
     df = df[df["transcription"].notna() & (df["transcription"].astype(str).str.strip() != "")]
