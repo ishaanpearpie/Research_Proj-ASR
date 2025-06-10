@@ -101,10 +101,10 @@ class Config:
     model_name = "facebook/wav2vec2-base-960h"
     learning_rate = 3e-4
     epochs = 15
-    hidden_dropout = 0.1
+    hidden_dropout = 0.05
     batch_size = 16
     sampling_rate = 16000
-    data_dir = "/kaggle/input/combined-dataset"
+    data_dir = "/kaggle/input/telugu-asr-trimmed-dataset/Trimmed_Dataset"
     output_dir = "/kaggle/working/output"
     device = "cuda"
 
@@ -140,8 +140,8 @@ def prepare_dataset(data_dir: str):
     
     print("Processing dataset for the first time...")
     # Using the exact paths provided by the user
-    csv_path = "/kaggle/input/combined-dataset/combined_dataset.csv"
-    audio_clips_dir = "/kaggle/input/combined-dataset/combined_dataset/combined_dataset"
+    csv_path = "/kaggle/input/telugu-asr-trimmed-dataset/Trimmed_Dataset/transcriptions.csv"
+    audio_clips_dir = "/kaggle/input/telugu-asr-trimmed-dataset/Trimmed_Dataset/clips"
 
     if not os.path.exists(csv_path):
         raise FileNotFoundError(f"Transcription file not found at {csv_path}. Please verify the dataset structure.")
