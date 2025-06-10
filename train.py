@@ -192,9 +192,10 @@ def prepare_dataset(data_dir: str):
     dataset = dataset.map(
         prepare_dataset_features,
         remove_columns=dataset.column_names, # Remove original columns if desired
-        batch_size=8, # Process in smaller batches for memory efficiency
+        batch_size=1, # Process one example at a time for maximum memory efficiency
         batched=True,
-        num_proc=1 # Reduce to 1 process to minimize memory usage
+        num_proc=1, # Reduce to 1 process to minimize memory usage
+        writer_batch_size=1000 # Write processed examples to disk more frequently
     )
     
     # Save processed dataset
