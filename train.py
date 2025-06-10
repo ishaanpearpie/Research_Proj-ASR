@@ -99,7 +99,7 @@ def cleanup_old_datasets():
 # Configuration
 class Config:
     model_name = "facebook/wav2vec2-base-960h"
-    learning_rate = 3e-4
+    learning_rate = 1e-5
     epochs = 15
     hidden_dropout = 0.05
     batch_size = 16
@@ -386,7 +386,7 @@ class PenalizePadCallback(TrainerCallback):
                 # Simple penalty: higher probability of pad -> higher penalty
                 # Penalty strength decays over steps
                 penalty_strength = (500 - state.global_step) / 500.0 # Decays from 1 to 0
-                penalty = pad_probs.mean() * penalty_strength * 0.5 # Increased multiplier to 0.5
+                penalty = pad_probs.mean() * penalty_strength * 0.01 # Significantly reduced multiplier
 
                 # Add penalty to the loss. This is a heuristic!
                 if outputs.loss is not None:
