@@ -163,35 +163,59 @@ def prepare_dataset(data_dir: str):
         # Audio files are in the specified audio_clips_dir
         audio_paths = [os.path.join(audio_clips_dir, filename) for filename in batch["filename"]]
         
-        # Load and resample audio
         processed_audio = []
-        for audio_path in audio_paths:
-            if not os.path.exists(audio_path):
-                raise FileNotFoundError(f"Audio file {os.path.basename(audio_path)} not found in {audio_clips_dir}.")
+        processed_labels = []
+        valid_transcriptions = []
 
-            waveform, sample_rate = torchaudio.load(audio_path)
+        for i, audio_path in enumerate(audio_paths):
+            filename = batch["filename"][i]
+            transcription = batch["transcription"][i]
             
-            # Convert to mono if stereo
-            if waveform.shape[0] > 1:
-                waveform = torch.mean(waveform, dim=0, keepdim=True)
-            
-            # Resample if necessary
-            if sample_rate != config.sampling_rate:
-                resampler = torchaudio.transforms.Resample(sample_rate, config.sampling_rate)
-                waveform = resampler(waveform)
-            
-            processed_audio.append(waveform.squeeze().numpy())
-            
-        # Process audio using the Wav2Vec2Processor
+            if not os.path.exists(audio_path):
+                print(f"Warning: Audio file not found at {audio_path}. Skipping.")
+                continue
+
+            try:
+                waveform, sample_rate = torchaudio.load(audio_path)
+                
+                # Convert to mono if stereo
+                if waveform.shape[0] > 1:
+                    waveform = torch.mean(waveform, dim=0, keepdim=True)
+                
+                # Resample if necessary
+                if sample_rate != config.sampling_rate:
+                    resampler = torchaudio.transforms.Resample(sample_rate, config.sampling_rate)
+                    waveform = resampler(waveform)
+                
+                # Tokenize transcription and ensure it's not empty
+                input_ids = processor.tokenizer(transcription).input_ids
+                if not input_ids: # Skip if transcription results in empty labels
+                    print(f"Warning: Transcription for {filename} resulted in empty labels. Skipping.")
+                    continue
+
+                processed_audio.append(waveform.squeeze().numpy())
+                processed_labels.append(input_ids)
+                valid_transcriptions.append(transcription) # Keep track of original valid transcriptions
+            except Exception as e:
+                print(f"Warning: Error processing {filename} ({e}). Skipping.")
+                continue
+        
+        # Only proceed if there's valid audio to process
+        if not processed_audio:
+            # Return empty lists for each key, ensuring the structure is consistent
+            return {"input_values": [], "labels": [], "transcription": [], "filename": [], "text": []}
+
         batch["input_values"] = processor(processed_audio, sampling_rate=config.sampling_rate).input_values
-        batch["labels"] = processor.tokenizer(batch["transcription"]).input_ids
+        batch["labels"] = processed_labels
+        batch["transcription"] = valid_transcriptions # Include valid transcriptions in the batch for debugging if needed
+
         return batch
 
     # Apply the preprocessing function using map for memory efficiency
     print("Mapping audio processing function to dataset (this might take a while)...")
     dataset = dataset.map(
         prepare_dataset_features,
-        remove_columns=dataset.column_names, # Remove original columns if desired
+        remove_columns=["filename", "transcription"], # Explicitly remove original columns
         batch_size=1, # Process one example at a time for maximum memory efficiency
         batched=True,
         num_proc=1, # Reduce to 1 process to minimize memory usage
@@ -212,20 +236,14 @@ class DataCollatorCTCWithPadding:
     debug_printed = False
     
     def __call__(self, features: List[Dict[str, Union[List[int], torch.Tensor]]]) -> Dict[str, torch.Tensor]:
-        filtered_features = []
-        for f in features:
-            text = f.get("text")
-            if text is None or (isinstance(text, float) and pd.isna(text)) or str(text).strip() == "":
-                continue
-            filtered_features.append(f)
-        features = filtered_features
-        if len(features) == 0:
-             print("Warning: All features in a batch were filtered out.")
-             return {
-                 "input_values": torch.empty(0, dtype=torch.float32),
-                 "attention_mask": torch.empty(0, dtype=torch.long),
-                 "labels": torch.empty(0, dtype=torch.long)
-             }
+        # If all features in a batch were filtered out by prepare_dataset_features, handle gracefully
+        if not features:
+            print("Warning: Received an empty batch in DataCollatorCTCWithPadding.")
+            return {
+                "input_values": torch.empty(0, dtype=torch.float32),
+                "attention_mask": torch.empty(0, dtype=torch.long),
+                "labels": torch.empty(0, dtype=torch.long)
+            }
         
         # Prepare input features for processor.pad
         # Now, input_values are directly in the features dictionary
@@ -238,10 +256,29 @@ class DataCollatorCTCWithPadding:
         )
 
         # Prepare labels (do NOT use processor.pad for labels)
-        label_ids = [torch.tensor(feature["labels"], dtype=torch.long) for feature in features]
+        # Filter out features with empty labels to prevent RuntimeError
+        label_ids = [torch.tensor(feature["labels"], dtype=torch.long) for feature in features if feature["labels"]]
+        
+        # Handle case where all label_ids might be empty after filtering
+        if not label_ids:
+            print("Warning: All label_ids became empty after filtering in DataCollatorCTCWithPadding. Returning empty batch.")
+            return {
+                "input_values": torch.empty(0, dtype=torch.float32),
+                "attention_mask": torch.empty(0, dtype=torch.long),
+                "labels": torch.empty(0, dtype=torch.long)
+            }
         
         labels = pad_sequence(label_ids, batch_first=True, padding_value=self.processor.tokenizer.pad_token_id)
         
+        # Additional check for empty labels tensor after padding
+        if labels.numel() == 0:
+            print("Warning: Labels tensor is empty after padding in DataCollatorCTCWithPadding. Returning empty batch.")
+            return {
+                "input_values": torch.empty(0, dtype=torch.float32),
+                "attention_mask": torch.empty(0, dtype=torch.long),
+                "labels": torch.empty(0, dtype=torch.long)
+            }
+
         # Replace padding with -100 for CTC loss
         labels = labels.masked_fill(labels == self.processor.tokenizer.pad_token_id, -100)
         batch["labels"] = labels
@@ -382,6 +419,10 @@ class CustomWav2Vec2ForCTC(Wav2Vec2ForCTC):
         # This value might need tuning
         epsilon = 1e-2 # Increased epsilon value
         outputs.logits = outputs.logits + epsilon
+
+        # Add this check to prevent RuntimeError if labels is empty
+        if labels is not None and labels.numel() > 0 and labels.max() >= self.config.vocab_size:
+             print(f"Warning: Labels contain values outside vocabulary range. Max label ID: {labels.max().item()}, Vocab size: {self.config.vocab_size}")
 
         return outputs
 
@@ -604,6 +645,7 @@ if __name__ == "__main__":
     
     # Train
     print("Starting training...")
+    print(f"Executing train.py from: {os.path.abspath(__file__)}")
     trainer.train()
     
     # Evaluate the model after training
